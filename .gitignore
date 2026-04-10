@@ -1,0 +1,15 @@
+# Environment / secrets
+.env
+
+# Local cache
+.ip8_cache/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDE
+.vscode/
+.idea/
