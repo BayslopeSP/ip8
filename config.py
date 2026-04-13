@@ -7,6 +7,10 @@ import os
 
 from dotenv import load_dotenv
 
+LANGFUSE_SECRET_KEY = "sk-lf-fe9b90cc-0e09-48aa-a9d6-d624280b8224"
+LANGFUSE_PUBLIC_KEY = "pk-lf-7da81a25-5188-4817-86d7-7bf6cb8fccbc"
+LANGFUSE_BASE_URL = "https://cloud.langfuse.com"
+
 # Load variables from .env file in the same directory (or any parent directory).
 # override=True ensures .env values always win over stale system environment variables.
 load_dotenv(override=True)

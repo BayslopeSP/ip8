@@ -8,6 +8,9 @@ import re
 import logging
 from typing import Optional
 from dataclasses import dataclass, field
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+import time
 
 import requests
 from bs4 import BeautifulSoup
@@ -291,23 +294,20 @@ def _parse_cpc_codes(soup: BeautifulSoup) -> list[dict[str, str]]:
     return cpc_entries
 
 
+import json
+import re
+
+
 def _parse_claims_text(soup: BeautifulSoup) -> str:
-    """
-    Extract the full claims section text from the patent page.
+    text = soup.get_text("\n", strip=True)
 
-    Args:
-        soup: Parsed BeautifulSoup document.
+    import re
 
-    Returns:
-        Full text of all patent claims, or empty string if not found.
-    """
-    claims_section = soup.find("section", {"itemprop": "claims"})
-    if claims_section:
-        return extract_text_from_element(claims_section)
+    # Try to extract numbered claims
+    matches = re.findall(r"\n\s*\d+\.\s.*?(?=\n\s*\d+\.|\Z)", text, re.DOTALL)
 
-    claims_div = soup.find("div", {"class": "claims"})
-    if claims_div:
-        return extract_text_from_element(claims_div)
+    if matches:
+        return " ".join(matches)[:8000]
 
     return ""
 
@@ -341,23 +341,6 @@ def _parse_description_text(soup: BeautifulSoup) -> str:
 
 
 def fetch_patent_details(patent_number: str) -> PatentData:
-    """
-    Fetch and parse all available data for a patent from Google Patents.
-
-    Makes an HTTP GET request to the Google Patents page for the given patent
-    number, then parses the HTML with BeautifulSoup to extract bibliographic
-    metadata, claims, description, CPC codes, and inventor information.
-
-    Args:
-        patent_number: The patent identifier (e.g. 'US10696212B2').
-
-    Returns:
-        A PatentData dataclass populated with all extracted fields.
-
-    Raises:
-        requests.RequestException: If the HTTP request fails.
-        ValueError: If patent_number is empty.
-    """
     if not patent_number:
         raise ValueError("Patent number must not be empty.")
 
@@ -365,14 +348,23 @@ def fetch_patent_details(patent_number: str) -> PatentData:
     url = build_google_patents_url(normalized_number)
     logger.info("Fetching patent data from: %s", url)
 
-    response = requests.get(
-        url,
-        headers=DEFAULT_REQUEST_HEADERS,
-        timeout=SCRAPER_REQUEST_TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
+    # 🔥 Setup headless browser
+    chrome_options = Options()
+    chrome_options.add_argument("--headless=new")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
 
-    soup = BeautifulSoup(response.text, "lxml")
+    driver = webdriver.Chrome(options=chrome_options)
+
+    logger.info("Opening patent page in browser: %s", url)
+    driver.get(url)
+
+    time.sleep(5)  # wait for JS
+
+    html = driver.page_source
+    soup = BeautifulSoup(html, "lxml")
+
+    driver.quit()
 
     patent_data = PatentData(
         patent_number=normalized_number,
@@ -386,7 +378,7 @@ def fetch_patent_details(patent_number: str) -> PatentData:
         cpc_codes=_parse_cpc_codes(soup),
         full_claims_text=_parse_claims_text(soup),
         description_text=_parse_description_text(soup),
-        raw_html=response.text[:50000],  # Store first 50k chars for debug use
+        raw_html=html[:50000],  # ✅ FIXED
     )
 
     logger.info(

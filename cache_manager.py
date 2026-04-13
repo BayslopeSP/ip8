@@ -62,8 +62,9 @@ def save_to_cache(patent_number: str, step_key: str, data: Any) -> None:
             pickle.dump(data, cache_file, protocol=pickle.HIGHEST_PROTOCOL)
         logger.info("Cache saved: %s", cache_path)
     except (OSError, pickle.PicklingError) as exc:
-        logger.warning("Failed to save cache for %s / %s: %s",
-                       patent_number, step_key, exc)
+        logger.warning(
+            "Failed to save cache for %s / %s: %s", patent_number, step_key, exc
+        )
 
 
 def load_from_cache(patent_number: str, step_key: str) -> Optional[Any]:
@@ -86,8 +87,9 @@ def load_from_cache(patent_number: str, step_key: str) -> Optional[Any]:
         logger.info("Cache loaded: %s", cache_path)
         return data
     except (OSError, pickle.UnpicklingError, EOFError) as exc:
-        logger.warning("Failed to load cache for %s / %s: %s",
-                       patent_number, step_key, exc)
+        logger.warning(
+            "Failed to load cache for %s / %s: %s", patent_number, step_key, exc
+        )
         return None
 
 
@@ -128,8 +130,7 @@ def clear_cache_for_patent(patent_number: str) -> int:
             deleted_count += 1
             logger.info("Deleted cache file: %s", cache_file)
         except OSError as exc:
-            logger.warning("Failed to delete cache file %s: %s",
-                           cache_file, exc)
+            logger.warning("Failed to delete cache file %s: %s", cache_file, exc)
 
     return deleted_count
 

@@ -234,8 +234,7 @@ def extract_patent_novelty_and_background(
         claims_text=truncate_text_for_prompt(claims_text, 2000),
     )
     try:
-        result = _call_llm_for_json(
-            _PATENT_ATTORNEY_SYSTEM_PROMPT, user_prompt)
+        result = _call_llm_for_json(_PATENT_ATTORNEY_SYSTEM_PROMPT, user_prompt)
         return {
             "novelty_summary": result.get("novelty_summary", "Not available"),
             "background_summary": result.get("background_summary", "Not available"),
@@ -271,8 +270,7 @@ def classify_patent_domain_and_industry(
         cpc_codes_text=cpc_text,
     )
     try:
-        result = _call_llm_for_json(
-            _PATENT_ATTORNEY_SYSTEM_PROMPT, user_prompt)
+        result = _call_llm_for_json(_PATENT_ATTORNEY_SYSTEM_PROMPT, user_prompt)
         return {
             "domain": result.get("domain", "Technology"),
             "subdomain": result.get("subdomain", "General"),
@@ -304,8 +302,7 @@ def classify_patent_claims(claims_text: str) -> dict[str, list]:
         claims_text=truncate_text_for_prompt(claims_text, 4000),
     )
     try:
-        result = _call_llm_for_json(
-            _PATENT_ATTORNEY_SYSTEM_PROMPT, user_prompt)
+        result = _call_llm_for_json(_PATENT_ATTORNEY_SYSTEM_PROMPT, user_prompt)
         independent_claims = result.get("independent_claims", [])
         dependent_claims = result.get("dependent_claims", [])
         return {
@@ -334,8 +331,7 @@ def decompose_claim_into_elements(claim_text: str) -> list[dict[str, str]]:
         claim_text=truncate_text_for_prompt(claim_text, 2000),
     )
     try:
-        result = _call_llm_for_json(
-            _CLAIM_DECOMPOSITION_SYSTEM_PROMPT, user_prompt)
+        result = _call_llm_for_json(_CLAIM_DECOMPOSITION_SYSTEM_PROMPT, user_prompt)
         elements = result.get("elements", [])
         return [
             {
@@ -367,8 +363,9 @@ def run_full_claim_preprocessing(
         Dict containing keys: novelty_summary, background_summary, domain, subdomain,
         industry, independent_claims, dependent_claims.
     """
-    logger.info("Running full claim preprocessing for patent: %s",
-                patent_data.patent_number)
+    logger.info(
+        "Running full claim preprocessing for patent: %s", patent_data.patent_number
+    )
 
     novelty_result = extract_patent_novelty_and_background(
         title=patent_data.title,
@@ -382,8 +379,7 @@ def run_full_claim_preprocessing(
         cpc_codes=patent_data.cpc_codes,
     )
 
-    claims_result = classify_patent_claims(
-        claims_text=patent_data.full_claims_text)
+    claims_result = classify_patent_claims(claims_text=patent_data.full_claims_text)
 
     return {
         "novelty_summary": novelty_result["novelty_summary"],

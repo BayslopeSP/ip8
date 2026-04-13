@@ -8,8 +8,12 @@ Run with:
     streamlit run app.py
 """
 
+from reportlab.platypus import SimpleDocTemplate, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet
+import io
 import logging
 import traceback
+import pandas as pd
 
 import streamlit as st
 
@@ -43,6 +47,14 @@ from ui_components import (
     render_pipeline_progress,
     render_cache_info_banner,
 )
+from langfuse import Langfuse
+import uuid
+
+langfuse = Langfuse(
+    public_key="pk-lf-7da81a25-5188-4817-86d7-7bf6cb8fccbc",
+    secret_key="sk-lf-fe9b90cc-0e09-48aa-a9d6-d624280b8224",
+    host="https://cloud.langfuse.com",
+)
 
 # =============================================================================
 # LOGGING CONFIGURATION
@@ -71,6 +83,7 @@ st.set_page_config(
 # SESSION STATE INITIALIZATION
 # =============================================================================
 
+
 def initialize_session_state() -> None:
     """
     Initialize all required Streamlit session state keys to their default values.
@@ -84,7 +97,7 @@ def initialize_session_state() -> None:
         "preprocessing_results": None,
         "selected_claim_numbers": [],
         "confirmed_claims": False,
-        "claim_elements_map": {},        # {claim_number: [element dicts]}
+        "claim_elements_map": {},  # {claim_number: [element dicts]}
         # {claim_number: [selected element dicts]}
         "selected_elements_map": {},
         "confirmed_elements": False,
@@ -166,6 +179,7 @@ def attempt_load_full_pipeline_from_cache(patent_number: str) -> bool:
 # SIDEBAR
 # =============================================================================
 
+
 def render_sidebar() -> str:
     """
     Render the application sidebar containing patent input, cache controls,
@@ -179,12 +193,16 @@ def render_sidebar() -> str:
         st.caption("Patent Infringement Detection System")
         st.markdown("---")
 
-        patent_input = st.text_input(
-            "Patent Number",
-            placeholder="e.g., US10696212B2",
-            help="Enter a US patent number in standard format.",
-            key="sidebar_patent_input",
-        ).strip().upper()
+        patent_input = (
+            st.text_input(
+                "Patent Number",
+                placeholder="e.g., US10696212B2",
+                help="Enter a US patent number in standard format.",
+                key="sidebar_patent_input",
+            )
+            .strip()
+            .upper()
+        )
 
         st.markdown("---")
         st.markdown("**Cache Controls**")
@@ -196,8 +214,7 @@ def render_sidebar() -> str:
                 st.caption(f"📦 Cache: {size_kb:.1f} KB for {patent_input}")
                 if st.button("🗑️ Clear Cache & Re-run", use_container_width=True):
                     deleted = clear_cache_for_patent(patent_input)
-                    st.success(
-                        f"Deleted {deleted} cache file(s). Re-running analysis.")
+                    st.success(f"Deleted {deleted} cache file(s). Re-running analysis.")
                     _reset_pipeline_session_state()
                     st.rerun()
             else:
@@ -229,6 +246,7 @@ def render_sidebar() -> str:
 # PIPELINE RESET
 # =============================================================================
 
+
 def _reset_pipeline_session_state() -> None:
     """
     Reset all pipeline-related session state keys to their default values.
@@ -237,11 +255,21 @@ def _reset_pipeline_session_state() -> None:
     a clean slate for the new analysis run.
     """
     pipeline_keys = [
-        "patent_data", "preprocessing_results", "selected_claim_numbers",
-        "confirmed_claims", "claim_elements_map", "selected_elements_map",
-        "confirmed_elements", "industry_scope_all", "queries",
-        "queries_confirmed", "candidate_urls", "scraped_pages",
-        "analysis_results", "pipeline_complete", "pipeline_running",
+        "patent_data",
+        "preprocessing_results",
+        "selected_claim_numbers",
+        "confirmed_claims",
+        "claim_elements_map",
+        "selected_elements_map",
+        "confirmed_elements",
+        "industry_scope_all",
+        "queries",
+        "queries_confirmed",
+        "candidate_urls",
+        "scraped_pages",
+        "analysis_results",
+        "pipeline_complete",
+        "pipeline_running",
         "loaded_from_cache",
     ]
     for key in pipeline_keys:
@@ -253,6 +281,7 @@ def _reset_pipeline_session_state() -> None:
 # =============================================================================
 # STEP 2: PATENT FETCH
 # =============================================================================
+
 
 def run_step_patent_fetch(patent_number: str) -> bool:
     """
@@ -271,13 +300,18 @@ def run_step_patent_fetch(patent_number: str) -> bool:
 
     try:
         patent_data = fetch_patent_details(patent_number)
+        st.write("DEBUG CLAIMS LENGTH:", len(patent_data.full_claims_text))
+        st.write("RAW HTML LENGTH:", len(patent_data.raw_html))
         st.session_state["patent_data"] = patent_data
         save_to_cache(patent_number, _CACHE_KEY_PATENT, patent_data)
 
-        st.success(
-            f"✅ Patent data fetched: **{patent_data.title or patent_number}**")
+        st.success(f"✅ Patent data fetched: **{patent_data.title or patent_number}**")
         return True
     except Exception as exc:
+        trace = st.session_state.get("trace")
+
+        if trace:
+            trace.event(name="ERROR", level="error", input=str(exc))
         st.error(f"❌ Failed to fetch patent data: {exc}")
         logger.error("Patent fetch error: %s\n%s", exc, traceback.format_exc())
         return False
@@ -286,6 +320,7 @@ def run_step_patent_fetch(patent_number: str) -> bool:
 # =============================================================================
 # STEP 3: CLAIM PREPROCESSING
 # =============================================================================
+
 
 def run_step_claim_preprocessing(patent_number: str) -> bool:
     """
@@ -305,16 +340,28 @@ def run_step_claim_preprocessing(patent_number: str) -> bool:
 
     patent_data = st.session_state["patent_data"]
     try:
+
+        trace = st.session_state.get("trace")
         preprocessing_results = run_full_claim_preprocessing(patent_data)
+        # 🔥 Langfuse logging
+        if trace:
+            trace.generation(
+                name="LLM Preprocessing",
+                input="Patent Claims",
+                output=preprocessing_results,
+            )
+
         st.session_state["preprocessing_results"] = preprocessing_results
-        save_to_cache(patent_number, _CACHE_KEY_PREPROCESSING,
-                      preprocessing_results)
+        save_to_cache(patent_number, _CACHE_KEY_PREPROCESSING, preprocessing_results)
         st.success("✅ LLM preprocessing complete.")
         return True
     except Exception as exc:
+        trace = st.session_state.get("trace")
+
+        if trace:
+            trace.event(name="ERROR", level="error", input=str(exc))
         st.error(f"❌ LLM preprocessing failed: {exc}")
-        logger.error("Preprocessing error: %s\n%s",
-                     exc, traceback.format_exc())
+        logger.error("Preprocessing error: %s\n%s", exc, traceback.format_exc())
         return False
 
 
@@ -330,29 +377,39 @@ def display_preprocessing_results() -> None:
     if not patent_data or not preprocessing:
         return
 
-    render_step_header(
-        2, "Patent Analysis", completed=True)
+    render_step_header(2, "Patent Analysis", completed=True)
 
     # Patent metadata table
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("**Patent Metadata**")
         meta_data = {
-            "Field": ["Priority Date", "Filing Date", "Assignee", "Inventors", "Domain", "Sub-domain", "Industry"],
+            "Field": [
+                "Priority Date",
+                "Filing Date",
+                "Assignee",
+                "Inventors",
+                "Domain",
+                "Sub-domain",
+                "Industry",
+            ],
             "Value": [
                 patent_data.priority_date or "Unknown",
                 patent_data.filing_date or "Unknown",
                 patent_data.assignee or "Unknown",
-                ", ".join(
-                    patent_data.inventors) if patent_data.inventors else "Unknown",
+                (
+                    ", ".join(patent_data.inventors)
+                    if patent_data.inventors
+                    else "Unknown"
+                ),
                 preprocessing.get("domain", ""),
                 preprocessing.get("subdomain", ""),
                 preprocessing.get("industry", ""),
             ],
         }
         import pandas as pd
-        st.dataframe(pd.DataFrame(meta_data),
-                     use_container_width=True, hide_index=True)
+
+        st.dataframe(pd.DataFrame(meta_data), use_container_width=True, hide_index=True)
 
     with col2:
         st.markdown("**CPC Classification Codes**")
@@ -370,8 +427,7 @@ def display_preprocessing_results() -> None:
 
     col3, col4 = st.columns(2)
     with col3:
-        st.markdown(
-            f"**Independent Claims ({len(independent_claims)} found)**")
+        st.markdown(f"**Independent Claims ({len(independent_claims)} found)**")
         if independent_claims:
             for claim in independent_claims:
                 st.markdown(
@@ -389,6 +445,7 @@ def display_preprocessing_results() -> None:
 # STEP 3b: CLAIM SELECTION
 # =============================================================================
 
+
 def run_step_claim_selection() -> None:
     """
     Execute Step 3b: render claim selection UI and capture the user's choice.
@@ -396,15 +453,15 @@ def run_step_claim_selection() -> None:
     Auto-selects if only one independent claim exists. Otherwise shows checkboxes
     for the user to pick which claims to analyze, guarded by a confirm button.
     """
-    render_step_header(3, "Claim Selection", completed=st.session_state.get(
-        "confirmed_claims", False))
+    render_step_header(
+        3, "Claim Selection", completed=st.session_state.get("confirmed_claims", False)
+    )
 
     preprocessing = st.session_state.get("preprocessing_results", {})
     independent_claims = preprocessing.get("independent_claims", [])
 
     if not independent_claims:
-        st.warning(
-            "No independent claims were detected. Check patent claims text.")
+        st.warning("No independent claims were detected. Check patent claims text.")
         return
 
     if len(independent_claims) == 1:
@@ -412,7 +469,8 @@ def run_step_claim_selection() -> None:
         st.session_state["selected_claim_numbers"] = [claim_number]
         st.session_state["confirmed_claims"] = True
         st.success(
-            f"✅ Auto-selected the only independent claim: **Claim {claim_number}**")
+            f"✅ Auto-selected the only independent claim: **Claim {claim_number}**"
+        )
         return
 
     # Multiple independent claims — show selection UI
@@ -428,12 +486,14 @@ def run_step_claim_selection() -> None:
     else:
         selected_nums = st.session_state.get("selected_claim_numbers", [])
         st.success(
-            f"✅ Selected claims: {', '.join(f'Claim {n}' for n in selected_nums)}")
+            f"✅ Selected claims: {', '.join(f'Claim {n}' for n in selected_nums)}"
+        )
 
 
 # =============================================================================
 # STEP 4: CLAIM ELEMENT DECOMPOSITION
 # =============================================================================
+
 
 def run_step_claim_decomposition(patent_number: str) -> None:
     """
@@ -464,11 +524,27 @@ def run_step_claim_decomposition(patent_number: str) -> None:
                 if claim_number not in selected_claim_numbers:
                     continue
                 claim_text = claim.get("text", "")
+
                 elements = decompose_claim_into_elements(claim_text)
+                trace = st.session_state.get("trace")
+
+                # ✅ Always log output
+                if trace:
+                    trace.generation(
+                        name=f"Claim {claim_number} Decomposition",
+                        input=claim_text,
+                        output=elements,
+                    )
+                # ⚠️ Only for bad output
+                if not elements or not isinstance(elements, list):
+                    if trace:
+                        trace.event(
+                            name="Invalid LLM Output", level="warning", input=claim_text
+                        )
+
                 elements_map[claim_number] = elements
                 logger.info(
-                    "Decomposed claim %d into %d elements.", claim_number, len(
-                        elements)
+                    "Decomposed claim %d into %d elements.", claim_number, len(elements)
                 )
             st.session_state["claim_elements_map"] = elements_map
 
@@ -476,16 +552,20 @@ def run_step_claim_decomposition(patent_number: str) -> None:
 
     if st.session_state.get("confirmed_elements"):
         for claim_number, elements in claim_elements_map.items():
-            st.markdown(
-                f"**Claim {claim_number} — {len(elements)} element(s):**")
+            st.markdown(f"**Claim {claim_number} — {len(elements)} element(s):**")
             selected_elements = st.session_state["selected_elements_map"].get(
-                claim_number, elements)
+                claim_number, elements
+            )
             for elem in selected_elements:
                 st.markdown(
-                    f"  ✅ **{elem.get('component')}** — {elem.get('function')}")
+                    f"  ✅ **{elem.get('component')}** — {elem.get('function')}"
+                )
         industry = preprocessing.get("industry", "Technology")
-        scope_label = "All industries" if st.session_state.get(
-            "industry_scope_all") else f"{industry} only"
+        scope_label = (
+            "All industries"
+            if st.session_state.get("industry_scope_all")
+            else f"{industry} only"
+        )
         st.success(f"✅ Elements confirmed | Scope: {scope_label}")
         return
 
@@ -510,8 +590,7 @@ def run_step_claim_decomposition(patent_number: str) -> None:
     industry_scope_all = scope_choice == "All industries"
 
     if st.button("✅ Confirm Elements & Build Queries", key="confirm_elements_btn"):
-        any_elements_selected = any(
-            len(v) > 0 for v in selected_elements_map.values())
+        any_elements_selected = any(len(v) > 0 for v in selected_elements_map.values())
         if not any_elements_selected:
             st.error("Please keep at least one element selected.")
         else:
@@ -524,6 +603,7 @@ def run_step_claim_decomposition(patent_number: str) -> None:
 # =============================================================================
 # STEP 5: QUERY GENERATION
 # =============================================================================
+
 
 def run_step_query_generation(patent_number: str) -> bool:
     """
@@ -549,8 +629,7 @@ def run_step_query_generation(patent_number: str) -> bool:
     # Already confirmed — just show a summary and let the pipeline continue.
     if queries_confirmed and queries_exist:
         queries = st.session_state["queries"]
-        render_generated_queries(
-            queries["company_queries"], queries["product_queries"])
+        render_generated_queries(queries["company_queries"], queries["product_queries"])
         return True
 
     preprocessing = st.session_state.get("preprocessing_results", {})
@@ -572,6 +651,12 @@ def run_step_query_generation(patent_number: str) -> bool:
                 claim_elements=all_selected_elements,
                 novelty_summary=preprocessing.get("novelty_summary", ""),
             )
+
+            trace = st.session_state.get("trace")
+            if trace:
+                trace.generation(
+                    name="Query Generation", input=all_selected_elements, output=queries
+                )
             st.session_state["queries"] = queries
             save_to_cache(patent_number, _CACHE_KEY_QUERIES, queries)
             st.success(
@@ -579,18 +664,23 @@ def run_step_query_generation(patent_number: str) -> bool:
                 f"and {len(queries['product_queries'])} product queries."
             )
         except Exception as exc:
+            trace = st.session_state.get("trace")
+
+            if trace:
+                trace.event(name="ERROR", level="error", input=str(exc))
+
             st.error(f"❌ Query generation failed: {exc}")
-            logger.error("Query generation error: %s\n%s",
-                         exc, traceback.format_exc())
+            logger.error("Query generation error: %s\n%s", exc, traceback.format_exc())
             return False
 
     # Show the queries so the user can review them.
     queries = st.session_state["queries"]
-    render_generated_queries(
-        queries["company_queries"], queries["product_queries"])
+    render_generated_queries(queries["company_queries"], queries["product_queries"])
 
     # User must explicitly approve before Step 6 begins.
-    st.info("Review the generated queries above, then click the button below to start searching.")
+    st.info(
+        "Review the generated queries above, then click the button below to start searching."
+    )
     if st.button("🔍 Proceed to Search", key="confirm_queries_btn", type="primary"):
         st.session_state["queries_confirmed"] = True
         st.rerun()
@@ -601,6 +691,7 @@ def run_step_query_generation(patent_number: str) -> bool:
 # =============================================================================
 # STEP 6: SEARCH
 # =============================================================================
+
 
 def run_step_serpapi_search(patent_number: str) -> bool:
     """
@@ -643,10 +734,13 @@ def run_step_serpapi_search(patent_number: str) -> bool:
                 "https://serpapi.com/dashboard and try re-running."
             )
             return False
-        st.success(
-            f"✅ Found {len(candidate_urls)} candidate URLs for scraping.")
+        st.success(f"✅ Found {len(candidate_urls)} candidate URLs for scraping.")
         return True
     except RuntimeError as exc:
+        trace = st.session_state.get("trace")
+
+        if trace:
+            trace.event(name="ERROR", level="error", input=str(exc))
         # SerpAPI returned an explicit error (bad key, quota exceeded, etc.)
         error_text = str(exc)
         st.error(f"❌ SerpAPI API error: **{error_text}**")
@@ -655,7 +749,11 @@ def run_step_serpapi_search(patent_number: str) -> bool:
                 "Your SERP_API_KEY appears to be invalid. "
                 "Check the key at https://serpapi.com/dashboard and update your `.env` file."
             )
-        elif "credit" in error_text.lower() or "quota" in error_text.lower() or "plan" in error_text.lower():
+        elif (
+            "credit" in error_text.lower()
+            or "quota" in error_text.lower()
+            or "plan" in error_text.lower()
+        ):
             st.info(
                 "Your SerpAPI account has run out of credits or searches. "
                 "Check your plan at https://serpapi.com/dashboard."
@@ -663,6 +761,11 @@ def run_step_serpapi_search(patent_number: str) -> bool:
         logger.error("Search error: %s\n%s", exc, traceback.format_exc())
         return False
     except Exception as exc:
+
+        trace = st.session_state.get("trace")
+
+        if trace:
+            trace.event(name="ERROR", level="error", input=str(exc))
         st.error(f"❌ SerpAPI search failed: {exc}")
         logger.error("Search error: %s\n%s", exc, traceback.format_exc())
         return False
@@ -671,6 +774,7 @@ def run_step_serpapi_search(patent_number: str) -> bool:
 # =============================================================================
 # STEP 7: SCRAPING
 # =============================================================================
+
 
 def run_step_web_scraping(patent_number: str) -> bool:
     """
@@ -691,8 +795,7 @@ def run_step_web_scraping(patent_number: str) -> bool:
     if st.session_state.get("scraped_pages"):
         scraped_pages = st.session_state["scraped_pages"]
         successful = sum(1 for p in scraped_pages if p.scrape_success)
-        st.success(
-            f"✅ Scraped {successful}/{len(scraped_pages)} pages (from cache).")
+        st.success(f"✅ Scraped {successful}/{len(scraped_pages)} pages (from cache).")
         return True
 
     progress_placeholder = st.empty()
@@ -705,8 +808,7 @@ def run_step_web_scraping(patent_number: str) -> bool:
         for idx, url in enumerate(candidate_urls, start=1):
             with progress_placeholder.container():
                 st.progress((idx - 1) / total)
-                st.markdown(
-                    f"**Scraping page {idx}/{total}\u2026** `{url[:80]}`")
+                st.markdown(f"**Scraping page {idx}/{total}\u2026** `{url[:80]}`")
             page = scrape_page_content(url, driver)
             scraped_pages.append(page)
             with progress_placeholder.container():
@@ -723,13 +825,14 @@ def run_step_web_scraping(patent_number: str) -> bool:
                             else p.error_message[:60] or "Failed"
                         )
                         date_str = (
-                            f" | Date: {p.extracted_date}"
-                            if p.extracted_date
-                            else ""
+                            f" | Date: {p.extracted_date}" if p.extracted_date else ""
                         )
-                        st.markdown(
-                            f"{icon} `{p.url[:80]}` — {chars}{date_str}")
+                        st.markdown(f"{icon} `{p.url[:80]}` — {chars}{date_str}")
     except Exception as exc:
+        trace = st.session_state.get("trace")
+
+        if trace:
+            trace.event(name="ERROR", level="error", input=str(exc))
         st.error(f"❌ Scraping failed: {exc}")
         logger.error("Scraping error: %s\n%s", exc, traceback.format_exc())
         return False
@@ -746,7 +849,8 @@ def run_step_web_scraping(patent_number: str) -> bool:
 
     successful = sum(1 for p in scraped_pages if p.scrape_success)
     st.success(
-        f"✅ Scraping complete: {successful}/{len(scraped_pages)} pages successful.")
+        f"✅ Scraping complete: {successful}/{len(scraped_pages)} pages successful."
+    )
     return successful > 0
 
 
@@ -759,9 +863,11 @@ def _render_scoring_summary(results: list) -> None:
     """Show Step 9 scoring header and high-level match metrics."""
     render_step_header(9, "Infringement Scoring", completed=True)
     high_count = sum(
-        1 for r in results if r.infringement_label == config.SCORE_LABEL_HIGH)
+        1 for r in results if r.infringement_label == config.SCORE_LABEL_HIGH
+    )
     medium_count = sum(
-        1 for r in results if r.infringement_label == config.SCORE_LABEL_MEDIUM)
+        1 for r in results if r.infringement_label == config.SCORE_LABEL_MEDIUM
+    )
     low_count = len(results) - high_count - medium_count
     sc1, sc2, sc3, sc4 = st.columns(4)
     sc1.metric("Total Matches", len(results))
@@ -788,7 +894,8 @@ def run_step_infringement_analysis(patent_number: str) -> bool:
     if st.session_state.get("analysis_results") is not None:
         results = st.session_state["analysis_results"]
         st.success(
-            f"✅ Analysis complete: {len(results)} qualifying matches (from cache).")
+            f"✅ Analysis complete: {len(results)} qualifying matches (from cache)."
+        )
         if results:
             _render_scoring_summary(results)
         return True
@@ -803,13 +910,13 @@ def run_step_infringement_analysis(patent_number: str) -> bool:
     # (multi-claim analysis is iterative; we run the primary claim first)
     independent_claims = preprocessing.get("independent_claims", [])
     selected_claims_data = [
-        c for c in independent_claims
-        if c.get("claim_number") in selected_claim_numbers
+        c for c in independent_claims if c.get("claim_number") in selected_claim_numbers
     ]
 
     if not selected_claims_data:
         st.error(
-            "No selected claim data found. Please go back and reconfirm claim selection.")
+            "No selected claim data found. Please go back and reconfirm claim selection."
+        )
         return False
 
     total_pages = len(scraped_pages)
@@ -827,8 +934,7 @@ def run_step_infringement_analysis(patent_number: str) -> bool:
             claim_elements = selected_elements_map.get(claim_number, [])
 
             if not claim_elements:
-                logger.warning(
-                    "No elements for claim %d — skipping.", claim_number)
+                logger.warning("No elements for claim %d — skipping.", claim_number)
                 continue
 
             claim_results = analyze_all_scraped_pages(
@@ -841,13 +947,24 @@ def run_step_infringement_analysis(patent_number: str) -> bool:
                 selected_claim_text=claim_text,
                 claim_elements=claim_elements,
             )
+
+            trace = st.session_state.get("trace")
+            if trace:
+                trace.generation(
+                    name="Infringement Analysis",
+                    input={"claim": claim_text, "elements": claim_elements},
+                    output=[r.infringement_score for r in claim_results],
+                )
             all_qualifying_results.extend(claim_results)
 
         # Deduplicate by URL (keep highest-scoring entry per URL)
         url_to_best_result: dict[str, object] = {}
         for result in all_qualifying_results:
             existing = url_to_best_result.get(result.url)
-            if existing is None or result.infringement_score > existing.infringement_score:
+            if (
+                existing is None
+                or result.infringement_score > existing.infringement_score
+            ):
                 url_to_best_result[result.url] = result
 
         final_results = sorted(
@@ -861,12 +978,18 @@ def run_step_infringement_analysis(patent_number: str) -> bool:
         st.session_state["pipeline_complete"] = True
 
         st.success(
-            f"✅ Analysis complete: **{len(final_results)}** qualifying match(es) found.")
+            f"✅ Analysis complete: **{len(final_results)}** qualifying match(es) found."
+        )
         if final_results:
             _render_scoring_summary(final_results)
         return True
 
     except Exception as exc:
+        trace = st.session_state.get("trace")
+
+        if trace:
+            trace.event(name="ERROR", level="error", input=str(exc))
+
         st.error(f"❌ Infringement analysis failed: {exc}")
         logger.error("Analysis error: %s\n%s", exc, traceback.format_exc())
         return False
@@ -875,6 +998,7 @@ def run_step_infringement_analysis(patent_number: str) -> bool:
 # =============================================================================
 # MAIN APP
 # =============================================================================
+
 
 def main() -> None:
     """
@@ -912,9 +1036,24 @@ def main() -> None:
             """
         )
         return
+    # ---- LANGFUSE TRACE START ----
+    if "trace_id" not in st.session_state:
+        st.session_state["trace_id"] = str(uuid.uuid4())
+
+    trace = langfuse.trace(
+        id=st.session_state["trace_id"],
+        name="IP8 Patent Pipeline",
+        metadata={"patent_number": patent_number},
+    )
+
+    st.session_state["trace"] = trace
+    #  ---- LANGFUSE TRACE END ----
 
     # Detect patent number change — reset if different from last run
-    if st.session_state.get("patent_number") and st.session_state["patent_number"] != patent_number:
+    if (
+        st.session_state.get("patent_number")
+        and st.session_state["patent_number"] != patent_number
+    ):
         _reset_pipeline_session_state()
     st.session_state["patent_number"] = patent_number
 
@@ -940,14 +1079,18 @@ def main() -> None:
             st.session_state["pipeline_running"] = True
 
     # ─── DISPLAY RESULTS IF LOADED FROM CACHE ────────────────────────────────
-    if st.session_state.get("loaded_from_cache") and st.session_state.get("pipeline_complete"):
+    if st.session_state.get("loaded_from_cache") and st.session_state.get(
+        "pipeline_complete"
+    ):
         cache_size = get_cache_size_bytes(patent_number)
         render_cache_info_banner(patent_number, cache_size)
         _display_completed_pipeline()
         return
 
     # ─── PIPELINE EXECUTION ───────────────────────────────────────────────────
-    if not st.session_state.get("pipeline_running") and not st.session_state.get("patent_data"):
+    if not st.session_state.get("pipeline_running") and not st.session_state.get(
+        "patent_data"
+    ):
         if not analyze_button_clicked:
             st.info("Click **Analyze Patent** to start the pipeline.")
         return
@@ -1025,8 +1168,7 @@ def main() -> None:
             st.session_state["pipeline_running"] = False
             return
     else:
-        render_step_header(
-            8, "Product Analysis & Infringement Scoring", completed=True)
+        render_step_header(8, "Product Analysis & Infringement Scoring", completed=True)
         st.success(
             f"✅ {len(st.session_state['analysis_results'])} qualifying match(es) found."
         )
@@ -1034,8 +1176,43 @@ def main() -> None:
     st.session_state["pipeline_running"] = False
     st.markdown("---")
 
-    # Step 10: Results Dashboard
-    _display_completed_pipeline()
+
+def generate_pdf(report_text):
+    buffer = io.BytesIO()
+
+    doc = SimpleDocTemplate(buffer)
+    styles = getSampleStyleSheet()
+
+    content = []
+
+    for line in report_text.split("\n"):
+
+        # 🔥 Make headings bold automatically
+        if any(
+            keyword in line
+            for keyword in [
+                "Title:",
+                "Patent Number:",
+                "Patent Title:",
+                "Company:",
+                "Product:",
+                "Risk Level:",
+                "Score:",
+                "Matched Elements:",
+                "Analysis:",
+                "1.",
+                "2.",
+                "3.",
+                "4.",
+            ]
+        ):
+            line = f"<b>{line}</b>"
+        content.append(Paragraph(line, styles["Normal"]))
+
+    doc.build(content)
+
+    buffer.seek(0)
+    return buffer
 
 
 def _display_completed_pipeline() -> None:
@@ -1064,6 +1241,169 @@ def _display_completed_pipeline() -> None:
         selected_claim_numbers=selected_claim_numbers,
         assignee=patent_data.assignee,
     )
+
+    # ================= 🔥 DEEP ANALYSIS (TOP RESULT) =================
+    st.markdown("---")
+    st.subheader("🔍 Deep Analysis (Top Match)")
+
+    if analysis_results and len(analysis_results) > 0:
+
+        # 🔥 Step 1: pick top HIGH score
+        top = analysis_results[0]
+
+        company = getattr(top, "company", "")
+        product = getattr(top, "product_name", getattr(top, "title", ""))
+        score = getattr(top, "infringement_score", 0)
+        label = getattr(top, "infringement_label", "")
+        url = getattr(top, "url", "")
+
+        st.write("Top Match:")
+        st.write(
+            {"Company": company, "Product": product, "Score": score, "Risk": label}
+        )
+
+        # 🔥 Step 2: extract matched elements
+        elements = getattr(top, "matched_elements", []) or []
+        st.write("Matched Elements:", elements)
+
+        # 🔥 Step 3: company website search
+        company_query = f"{company} official website"
+        site_links = search_and_collect_candidate_urls(
+            company_queries=[company_query], product_queries=[]
+        )
+
+        website_text = ""
+        if site_links:
+            driver = create_headless_chrome_driver()
+            page = scrape_page_content(site_links[0], driver)
+            website_text = page.page_text[:2000] if page else ""
+            driver.quit()
+
+        st.write("Website Extract:", website_text[:500])
+
+        # 🔥 Step 4: deep search
+        deep_query = f"{company} {product} {' '.join(elements[:3])}"
+        deep_links = search_and_collect_candidate_urls(
+            company_queries=[deep_query], product_queries=[]
+        )
+
+        extra_text = ""
+        if deep_links:
+            driver = create_headless_chrome_driver()
+            for l in deep_links[:2]:
+                page = scrape_page_content(l, driver)
+                if page:
+                    extra_text += page.page_text[:1000]
+            driver.quit()
+
+        st.write("Deep Query:", deep_query)
+
+        # 🔥 Step 5: FINAL REPORT (LLM)
+        from openai import OpenAI
+
+        client = OpenAI(api_key=config.OPENAI_API_KEY)
+
+        prompt = f"""
+You are a patent infringement analyst.
+
+Patent:
+{patent_data.title}
+
+Top Product:
+Company: {company}
+Product: {product}
+Score: {score}
+Risk: {label}
+
+Matched Elements:
+{elements}
+
+Website Evidence:
+{website_text}
+
+External Evidence:
+{extra_text}
+
+Task:
+1. Explain how product matches patent
+2. Identify matching components
+3. Provide evidence
+4. Give final risk level
+
+Generate professional report.
+"""
+
+        res = client.chat.completions.create(
+            model=config.LLM_MODEL, messages=[{"role": "user", "content": prompt}]
+        )
+
+        report = res.choices[0].message.content
+
+        st.subheader("📄 Final Deep Analysis Report")
+        st.write(report)
+
+        # 🔥 PDF GENERATION
+        pdf_file = generate_pdf(report)
+
+        st.download_button(
+            label="📥 Download Report as PDF",
+            data=pdf_file,
+            file_name="infringement_report.pdf",
+            mime="application/pdf",
+        )
+
+    # ================= 📊 FINAL ANALYTICS =================
+    st.markdown("---")
+    st.subheader("📊 Final Analytics Dashboard")
+
+    if analysis_results:
+        df = pd.DataFrame(
+            [
+                {
+                    "Company": getattr(r, "company", "Unknown"),
+                    "Product": getattr(
+                        r, "product_name", getattr(r, "title", "Unknown")
+                    ),
+                    "Score": getattr(r, "infringement_score", 0),
+                    "Label": getattr(r, "infringement_label", "Unknown"),
+                    "URL": getattr(r, "url", ""),
+                }
+                for r in analysis_results
+            ]
+        )
+
+        # 🔹 Score Distribution
+        st.markdown("### 🔢 Score Distribution")
+        st.bar_chart(df["Score"])
+
+        # 🔹 Risk Breakdown
+        st.markdown("### 🚨 Risk Breakdown")
+        risk_counts = df["Label"].value_counts()
+        st.bar_chart(risk_counts)
+
+        # 🔹 Top Companies
+        st.markdown("### 🏢 Top Companies")
+        company_counts = df["Company"].value_counts().head(5)
+        st.bar_chart(company_counts)
+
+        # 🔹 Top Products
+        st.markdown("### 🏆 Top Products")
+        product_counts = df["Product"].value_counts().head(5)
+        st.bar_chart(product_counts)
+
+        # 🔹 Best Match Highlight
+        st.markdown("### 🥇 Best Match Summary")
+
+        top = df.sort_values(by="Score", ascending=False).iloc[0]
+
+        st.success(
+            f"""
+        Top Company: {top['Company']}
+        Product: {top['Product']}
+        Score: {top['Score']}
+        Risk: {top['Label']}
+        """
+        )
 
     st.markdown("---")
     render_csv_export_button(analysis_results, patent_data.patent_number)

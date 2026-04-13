@@ -313,7 +313,8 @@ def analyze_product_for_infringement(
     numbered_elements = build_numbered_elements_list(claim_elements)
     extracted_date_str = scraped_page.extracted_date or "Unknown"
     truncated_page_text = truncate_page_text_for_prompt(
-        scraped_page.page_text, max_chars=2000)
+        scraped_page.page_text, max_chars=2000
+    )
 
     user_prompt = _PRODUCT_ANALYSIS_USER_PROMPT.format(
         title=patent_title,
@@ -331,22 +332,20 @@ def analyze_product_for_infringement(
 
     try:
         llm_output = _call_llm_for_json(
-            _INFRINGEMENT_ANALYST_SYSTEM_PROMPT, user_prompt)
+            _INFRINGEMENT_ANALYST_SYSTEM_PROMPT, user_prompt
+        )
 
         result.company_name = str(llm_output.get("company_name", ""))
         result.product_name = str(llm_output.get("product_name", ""))
-        result.technology_match = bool(
-            llm_output.get("technology_match", False))
+        result.technology_match = bool(llm_output.get("technology_match", False))
         result.similarity_score = int(llm_output.get("similarity_score", 0))
         result.matched_elements = list(llm_output.get("matched_elements", []))
-        result.unmatched_elements = list(
-            llm_output.get("unmatched_elements", []))
-        result.product_launch_date = str(
-            llm_output.get("product_launch_date", ""))
-        result.launch_after_priority_date = llm_output.get(
-            "launch_after_priority_date")
+        result.unmatched_elements = list(llm_output.get("unmatched_elements", []))
+        result.product_launch_date = str(llm_output.get("product_launch_date", ""))
+        result.launch_after_priority_date = llm_output.get("launch_after_priority_date")
         result.plain_english_analysis = str(
-            llm_output.get("plain_english_analysis", ""))
+            llm_output.get("plain_english_analysis", "")
+        )
         result.is_product_page = bool(llm_output.get("is_product_page", False))
 
         # Compute final infringement score from element match ratio
@@ -367,8 +366,7 @@ def analyze_product_for_infringement(
         )
 
     except Exception as exc:
-        logger.error("LLM analysis failed for %r: %s",
-                     scraped_page.url[:60], exc)
+        logger.error("LLM analysis failed for %r: %s", scraped_page.url[:60], exc)
         result.analysis_error = str(exc)
 
     return result
@@ -406,11 +404,9 @@ def analyze_all_scraped_pages(
     """
     all_results: list[ProductAnalysisResult] = []
 
-    logger.info("Analyzing %d scraped pages for infringement...",
-                len(scraped_pages))
+    logger.info("Analyzing %d scraped pages for infringement...", len(scraped_pages))
     for idx, page in enumerate(scraped_pages, start=1):
-        logger.info("Analyzing page %d/%d: %s", idx,
-                    len(scraped_pages), page.url[:60])
+        logger.info("Analyzing page %d/%d: %s", idx, len(scraped_pages), page.url[:60])
         analysis = analyze_product_for_infringement(
             scraped_page=page,
             patent_title=patent_title,
@@ -425,7 +421,8 @@ def analyze_all_scraped_pages(
 
     # Filter to only confirmed product pages with technology match
     qualifying_results = [
-        r for r in all_results
+        r
+        for r in all_results
         if r.is_product_page and r.technology_match and not r.analysis_error
     ]
 
